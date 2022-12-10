@@ -1,0 +1,27 @@
+{
+    "name": "dnsinyukov/sync-calendars",
+    "type": "library",
+    "autoload": {
+        "psr-4": {
+            "Dnsinyukov\\SyncCalendars\\": "src/"
+        }
+    },
+    "authors": [
+        {
+            "name": "Denis Sinyukov",
+            "email": "dnsinyukov@gmail.com"
+        }
+    ],
+    "require": {
+        "guzzlehttp/guzzle": "^7.5",
+        "google/apiclient": "^2.12"
+    },
+    "scripts": {
+        "pre-autoload-dump": "Google\\Task\\Composer::cleanup"
+    },
+    "extra": {
+        "google/apiclient-services": [
+            "Calendar"
+        ]
+    }
+}

@@ -2,15 +2,26 @@
 
 namespace Dnsinyukov\SyncCalendars\Providers;
 
-use Dnsinyukov\SyncCalendars\User;
+use Dnsinyukov\SyncCalendars\Providers\Synchronizers\GoogleSynchronizer;
+use Dnsinyukov\SyncCalendars\Token;
+use Dnsinyukov\SyncCalendars\Account;
+use Dnsinyukov\SyncCalendars\TokenFactory;
 use Google\Client;
 use Google\Service\Oauth2\Userinfo;
-use Illuminate\Http\RedirectResponse;
 use Illuminate\Support\Facades\Crypt;
+use Illuminate\Support\Str;
 
 class GoogleProvider extends AbstractProvider
 {
+    /**
+     * @var string
+     */
     protected $providerName = 'google';
+
+    /**
+     * @var string
+     */
+    protected $version = 'v3';
 
     /**
      * @return string
@@ -19,20 +30,6 @@ class GoogleProvider extends AbstractProvider
     {
         return $this->getHttpClient()->createAuthUrl();
     }
-
-    /**
-     * @return RedirectResponse
-     * @throws \Exception
-     */
-    public function redirect(): RedirectResponse
-    {
-        if ($redirectCallback = config('services.google.redirect_callback')) {
-            $this->request->query->add(['redirect_callback' => $redirectCallback]);
-        }
-
-        return parent::redirect();
-    }
-
 
     /**
      * @param string $code
@@ -60,12 +57,28 @@ class GoogleProvider extends AbstractProvider
      */
     protected function toUser($userProfile)
     {
-        return tap(new User(), function ($user) use ($userProfile) {
-            $user->setId($userProfile['sub']);
-            $user->setName($userProfile['name']);
-            $user->setEmail($userProfile['email']);
-            $user->setPicture($userProfile['picture']);
+        return tap(new Account(), function ($account) use ($userProfile) {
+            $account->setProviderId($userProfile['sub']);
+            $account->setName($userProfile['name']);
+            $account->setEmail($userProfile['email']);
+            $account->setPicture($userProfile['picture']);
         });
+    }
+
+    /**
+     * @param array $credentials
+     * @return Token
+     */
+    protected function createToken(array $credentials): Token
+    {
+        return TokenFactory::create([
+            'id_token' => $credentials['id_token'],
+            'access_token' => $credentials['access_token'],
+            'refresh_token' => $credentials['refresh_token'],
+            'scope' => $credentials['scope'],
+            'created_at' => $credentials['created'],
+            'expires_at' => $credentials['expires_in'],
+        ]);
     }
 
     /**
@@ -92,5 +105,42 @@ class GoogleProvider extends AbstractProvider
         }
 
         return $this->httpClient;
+    }
+
+    /**
+     * @param string $resource
+     * @param Account $account
+     * @param array $options
+     *
+     * @return mixed
+     */
+    public function synchronize(string $resource, Account $account, array $options = [])
+    {
+        $resource = Str::ucfirst($resource);
+
+        $method = 'synchronize' . Str::plural($resource);
+
+        $synchronizer = $this->getSynchronizer();
+
+        if (method_exists($synchronizer, $method) === false) {
+            throw new \InvalidArgumentException('Method is not allowed.', 400);
+        }
+
+        return call_user_func([$synchronizer, $method], $account, $options);
+    }
+
+    /**
+     * @return GoogleSynchronizer
+     */
+    public function getSynchronizer(): GoogleSynchronizer
+    {
+        if (empty($this->synchronizer)) {
+            $this->synchronizer = app(GoogleSynchronizer::class, [
+                'provider' => $this
+            ]);
+            $this->synchronizer->setHttpClient($this->getHttpClient()->getHttpClient());
+        }
+
+        return $this->synchronizer;
     }
 }

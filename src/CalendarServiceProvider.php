@@ -2,6 +2,8 @@
 
 namespace Dnsinyukov\SyncCalendars;
 
+use Dnsinyukov\SyncCalendars\Console\SynchronizeCalendars;
+use Dnsinyukov\SyncCalendars\Console\SynchronizeEvents;
 use Illuminate\Support\ServiceProvider;
 
 class CalendarServiceProvider extends ServiceProvider
@@ -15,6 +17,11 @@ class CalendarServiceProvider extends ServiceProvider
     {
         $this->loadMigrationsFrom(__DIR__.'/../database/migrations');
         $this->loadRoutesFrom(__DIR__.'/../routes/web.php');
+
+        $this->commands([
+            SynchronizeCalendars::class,
+            SynchronizeEvents::class,
+        ]);
     }
 
     /**

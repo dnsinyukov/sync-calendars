@@ -2,8 +2,8 @@
 
 namespace Dnsinyukov\SyncCalendars\Providers;
 
-use Carbon\Carbon;
-use Dnsinyukov\SyncCalendars\User;
+use Dnsinyukov\SyncCalendars\Token;
+use Dnsinyukov\SyncCalendars\Account;
 use GuzzleHttp\Client;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
@@ -11,6 +11,9 @@ use Illuminate\Support\Facades\Crypt;
 
 abstract class AbstractProvider implements ProviderInterface
 {
+    /**
+     * @var string
+     */
     protected $providerName;
 
     /**
@@ -58,9 +61,9 @@ abstract class AbstractProvider implements ProviderInterface
     /**
      * The request user
      *
-     * @var User|null
+     * @var Account|null
      */
-    protected $user;
+    protected $account;
 
     /**
      * The separating character for the requested scopes.
@@ -68,6 +71,16 @@ abstract class AbstractProvider implements ProviderInterface
      * @var string
      */
     protected $scopeSeparator = ' ';
+
+    /**
+     * @var string
+     */
+    protected $version;
+
+    /**
+     * @var array
+     */
+    protected $config;
 
     /**
      * Create a new provider instance.
@@ -85,6 +98,7 @@ abstract class AbstractProvider implements ProviderInterface
         $this->redirectUrl = $redirectUrl;
         $this->clientSecret = $clientSecret;
         $this->scopes = $scopes;
+        $this->config = config('services.' . $this->getProviderName());
     }
 
     /**
@@ -95,7 +109,7 @@ abstract class AbstractProvider implements ProviderInterface
     {
         $this->request->query->add(['state' => $this->getState()]);
 
-        if ($user = $this->request->user()) {
+        if ($user = $this->request->user($this->getConfig('guard', 'web'))) {
             $this->request->query->add(['user_id' => $user->getKey()]);
         }
 
@@ -103,41 +117,35 @@ abstract class AbstractProvider implements ProviderInterface
     }
 
     /**
-     * @return User
+     * @return Account
      */
-    public function getUser(): User
+    public function callback(): Account
     {
-        if (isset($this->user)) {
-            return $this->user;
+        if (isset($this->account)) {
+            return $this->account;
         }
 
+        $state = $this->request->get('state');
+
         try {
+            if (isset($state)) {
+                $state = Crypt::decrypt($state);
+            }
+
             $credentials = $this->fetchAccessTokenWithAuthCode(
                 $this->request->get('code', '')
             );
 
-            $this->user = $this->toUser($this->getBasicProfile($credentials));
+            $this->account = $this->toUser($this->getBasicProfile($credentials));
         } catch (\Exception $exception) {
             report($exception);
             throw new \InvalidArgumentException($exception->getMessage());
         }
 
-        $state = $this->request->get('state', '');
+        $token = $this->createToken($credentials);
+        $userId = $state['user_id'] ?? null;
 
-        if (isset($state)) {
-            $state = Crypt::decrypt($state);
-        }
-
-        return $this->user
-            ->setRedirectCallback($state['redirect_callback'])
-            ->setToken($credentials['access_token'])
-            ->setRefreshToken($credentials['refresh_token'])
-            ->setExpiresAt(
-                Carbon::now()->addSeconds($credentials['expires_in'])
-            )
-            ->setScopes(
-                explode($this->getScopeSeparator(), $credentials['scope'])
-            );
+        return $this->account->setUserId($userId)->setToken($token);
     }
 
     /**
@@ -171,6 +179,30 @@ abstract class AbstractProvider implements ProviderInterface
     }
 
     /**
+     * @return string
+     */
+    public function getVersion(): string
+    {
+        return $this->version;
+    }
+
+    /**
+     * @return mixed
+     */
+    public function getProviderName()
+    {
+        return $this->providerName;
+    }
+
+    /**
+     * @return array
+     */
+    public function getConfig(string $key, string $default = null): mixed
+    {
+        return $this->config[$key] ?? $default;
+    }
+
+    /**
      * @param $method
      * @param $args
      * @return mixed
@@ -188,4 +220,5 @@ abstract class AbstractProvider implements ProviderInterface
     abstract protected function fetchAccessTokenWithAuthCode(string $code);
     abstract protected function getBasicProfile($credentials);
     abstract protected function toUser($userProfile);
+    abstract protected function createToken(array $credentials): Token;
 }

@@ -3,9 +3,11 @@
 namespace Dnsinyukov\SyncCalendars\Http;
 
 use Dnsinyukov\SyncCalendars\CalendarManager;
-use Dnsinyukov\SyncCalendars\Services\UserService;
-use Dnsinyukov\SyncCalendars\User;
+use Dnsinyukov\SyncCalendars\Providers\ProviderInterface;
+use Dnsinyukov\SyncCalendars\Services\AccountService;
+use Dnsinyukov\SyncCalendars\Account;
 use Illuminate\Http\RedirectResponse;
+use Illuminate\Http\Request;
 use Illuminate\Routing\Controller;
 
 class AccountController extends Controller
@@ -21,13 +23,28 @@ class AccountController extends Controller
     }
 
     /**
+     * @param Request $request
      * @param string $driver
      * @return RedirectResponse
      */
-    public function auth(string $driver): RedirectResponse
+    public function auth(Request $request, string $driver): RedirectResponse
     {
+        /** @var ProviderInterface $provider */
+        $provider = $this->manager->driver($driver);
+
+        $authUser = $request->user(
+            $provider->getConfig('guard', 'web')
+        );
+
+        if (empty($authUser)) {
+            abort(403);
+        }
+
+//        dd(
+//            $this->manager->driver($driver)->synchronize('Calendar', [2])
+//        );
         try {
-            return $this->manager->driver($driver)->redirect();
+            return $provider->redirect();
         } catch (\InvalidArgumentException $exception) {
             report($exception);
 
@@ -41,12 +58,20 @@ class AccountController extends Controller
      */
     public function callback(string $driver): RedirectResponse
     {
-        /** @var User $user */
-        $user = $this->manager->driver($driver)->getUser();
+        /** @var ProviderInterface $provider */
+        $provider = $this->manager->driver($driver);
 
-        app(UserService::class)->saveFromUser($user, $driver);
+        /** @var Account $account */
+        $account = $provider->callback();
 
-        return redirect()->to($user->getRedirectCallback() ?? '/');
+        $accountId = app(AccountService::class)->createFrom($account, $driver);
 
+        $account->setId($accountId);
+
+        $provider->synchronize('Calendar', $account);
+
+        return redirect()->to(
+          config('services.' . $driver . '.redirect_callback', '/')
+        );
     }
 }

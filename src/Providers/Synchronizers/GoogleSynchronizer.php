@@ -10,14 +10,19 @@ use Dnsinyukov\SyncCalendars\Repositories\CalendarRepository;
 use Dnsinyukov\SyncCalendars\Repositories\EventRepository;
 use GuzzleHttp\Client;
 use GuzzleHttp\Exception\GuzzleException;
+use Illuminate\Support\Arr;
+use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Crypt;
+use Illuminate\Support\Facades\Log;
+use Psr\Container\ContainerExceptionInterface;
+use Psr\Container\NotFoundExceptionInterface;
 
 class GoogleSynchronizer
 {
     /**
-     * @var AccountRepository
+     * @var array
      */
-    protected $accountRepository;
+    protected $repositories = [];
 
     /**
      * @var Client
@@ -54,101 +59,107 @@ class GoogleSynchronizer
     }
 
     /**
+     * @param Account $account
+     * @param array $options
+     * @return false|void
+     * @throws ContainerExceptionInterface
      * @throws GuzzleException
+     * @throws NotFoundExceptionInterface
      */
-public function synchronizeCalendars(Account $account, array $options = [])
-{
-    $token = $account->getToken();
-    $accountId = $account->getId();
-    $syncToken = $account->getSyncToken();
+    public function synchronizeCalendars(Account $account, array $options = [])
+    {
+        $token = $account->getToken();
+        $accountId = $account->getId();
+        $syncToken = $account->getSyncToken();
 
-    if ($token->isExpired()) {
-        return false;
-    }
-
-    $query = array_merge([
-        'maxResults' => 100,
-        'minAccessRole' => 'owner', // The user can read and modify events and access control lists.
-    ], $options['query'] ?? []);
-
-    if (isset($syncToken)) {
-        $query = [
-            'syncToken' => $syncToken,
-        ];
-    }
-
-    $body = $this->call('GET', "/calendar/{$this->provider->getVersion()}/users/me/calendarList", [
-        'headers' => ['Authorization' => 'Bearer ' . $token->getAccessToken()],
-        'query' => $query
-    ]);
-
-    $nextSyncToken = $body['nextSyncToken'];
-    $calendarIterator = new \ArrayIterator($body['items']);
-
-    /** @var CalendarRepository $calendarRepository */
-    $calendarRepository = app(CalendarRepository::class);
-
-    // Check user calendars
-    $providersIds = $calendarRepository
-        ->setColumns(['provider_id'])
-        ->getByAttributes(['account_id' => $accountId, 'provider_type' => $this->provider->getProviderName()])
-        ->pluck('provider_id');
-
-    $now = now();
-
-    while ($calendarIterator->valid()) {
-        $calendar = $calendarIterator->current();
-        $calendarId = $calendar['id'];
-
-        // Delete account calendar by ID
-        if (key_exists('deleted', $calendar) && $calendar['deleted'] === true && $providersIds->contains($calendarId)) {
-            $calendarRepository->deleteWhere([
-                'provider_id' => $calendarId,
-                'provider_type' => $this->provider->getProviderName(),
-                'account_id' => $accountId,
-            ]);
-
-        // Update account calendar by ID
-        } else if ($providersIds->contains($calendarId)) {
-            $calendarRepository->updateByAttributes(
-                [
-                    'provider_id' => $calendarId,
-                    'provider_type' => $this->provider->getProviderName(),
-                    'account_id' => $accountId,
-                ],
-                [
-                    'summary' => $calendar['summary'],
-                    'timezone' => $calendar['timeZone'],
-                    'description' => $calendar['description'] ?? null,
-                    'updated_at' => $now,
-                ]
-            );
-        // Create account calendar
-        } else {
-            $calendarRepository->insert([
-                'provider_id' => $calendarId,
-                'provider_type' => $this->provider->getProviderName(),
-                'account_id' => $accountId,
-                'summary' => $calendar['summary'],
-                'timezone' => $calendar['timeZone'],
-                'description' => $calendar['description'] ?? null,
-                'selected' => $calendar['selected'] ?? false,
-                'created_at' => $now,
-                'updated_at' => $now,
-            ]);
+        if ($token->isExpired()) {
+            return false;
         }
 
-        $calendarIterator->next();
+        $query = array_merge([
+            'maxResults' => 100,
+            'minAccessRole' => 'owner', // The user can read and modify events and access control lists.
+        ], $options['query'] ?? []);
+
+        if (isset($syncToken)) {
+            $query = [
+                'syncToken' => $syncToken,
+            ];
+        }
+
+        $body = $this->call('GET', "/calendar/{$this->provider->getVersion()}/users/me/calendarList", [
+            'headers' => ['Authorization' => 'Bearer ' . $token->getAccessToken()],
+            'query' => $query
+        ]);
+
+        $nextSyncToken = $body['nextSyncToken'];
+        $calendarIterator = new \ArrayIterator($body['items']);
+
+        /** @var CalendarRepository $calendarRepository */
+        $calendarRepository = app(CalendarRepository::class);
+
+        // Check user calendars
+        $providersIds = $calendarRepository
+            ->setColumns(['provider_id'])
+            ->getByAttributes(['account_id' => $accountId, 'provider_type' => $this->provider->getProviderName()])
+            ->pluck('provider_id');
+
+        $now = now();
+
+        while ($calendarIterator->valid()) {
+            $calendar = $calendarIterator->current();
+            $calendarId = $calendar['id'];
+            $attributes = [
+                'provider_id' => $calendarId,
+                'provider_type' => $this->provider->getProviderName(),
+                'account_id' => $accountId,
+            ];
+
+            // Delete account calendar by ID
+            if (key_exists('deleted', $calendar) && $calendar['deleted'] === true && $providersIds->contains($calendarId)) {
+                $calendarRepository->deleteWhere($attributes);
+
+            // Update account calendar by ID
+            } else if ($providersIds->contains($calendarId)) {
+                $calendarRepository->updateByAttributes(
+                    $attributes,
+                    [
+                        'summary' => $calendar['summary'],
+                        'timezone' => $calendar['timeZone'],
+                        'description' => $calendar['description'] ?? null,
+                        'updated_at' => $now,
+                    ]
+                );
+            // Create account calendar
+            } else {
+                $calendarRepository->insert(
+                    array_merge($attributes, [
+                        'summary' => $calendar['summary'],
+                        'timezone' => $calendar['timeZone'],
+                        'description' => $calendar['description'] ?? null,
+                        'selected' => $calendar['selected'] ?? false,
+                        'created_at' => $now,
+                        'updated_at' => $now,
+                    ])
+                );
+            }
+
+            $calendarIterator->next();
+        }
+
+        $this->repository(AccountRepository::class)->updateByAttributes(
+            ['id' => $accountId],
+            ['sync_token' => Crypt::encryptString($nextSyncToken), 'updated_at' => $now]
+        );
     }
 
-    $this->getAccountRepository()->updateByAttributes(
-        ['id' => $accountId],
-        ['sync_token' => Crypt::encryptString($nextSyncToken), 'updated_at' => $now]
-    );
-}
-
     /**
+     * @param Account $account
+     * @param array $options
+     * @return false|void
+     * @throws ContainerExceptionInterface
      * @throws GuzzleException
+     * @throws NotFoundExceptionInterface
      */
     public function synchronizeEvents(Account $account, array $options = [])
     {
@@ -160,11 +171,15 @@ public function synchronizeCalendars(Account $account, array $options = [])
 
         $now = now();
 
-        $query = [
+        $query = Arr::only($options, ['timeMin', 'timeMax', 'maxResults']);
+        $query = array_merge($query, [
             'maxResults' => 25,
             'timeMin' => $now->copy()->startOfMonth()->toRfc3339String(),
             'timeMax' => $now->copy()->addMonth()->toRfc3339String()
-        ];
+        ]);
+
+        /** @var CalendarRepository $calendarRepository */
+        $calendarRepository = $this->repository(CalendarRepository::class);
 
         if ($token->isExpired()) {
             return false;
@@ -177,7 +192,17 @@ public function synchronizeCalendars(Account $account, array $options = [])
         }
 
         /** @var EventRepository $eventRepository */
-        $eventRepository = app(EventRepository::class);
+        $eventRepository = $this->repository(EventRepository::class);
+
+        $eventIds = $eventRepository
+            ->setColumns(['provider_id'])
+            ->getByAttributes([
+                'calendar_id' => $calendarId,
+                'provider_type' => $this->provider->getProviderName()
+            ])
+            ->pluck('provider_id');
+
+        $url = "/calendar/{$this->provider->getVersion()}/calendars/${calendarId}/events";
 
         do {
             if (isset($pageToken) && empty($syncToken)) {
@@ -186,57 +211,30 @@ public function synchronizeCalendars(Account $account, array $options = [])
                 ];
             }
 
-            $body = $this->call('GET', "/calendar/{$this->provider->getVersion()}/calendars/${calendarId}/events", [
+            Log::debug('Synchronize Events', [
+                'query' => $query
+            ]);
+
+            $body = $this->call('GET', $url, [
                 'headers' => ['Authorization' => 'Bearer ' . $token->getAccessToken()],
                 'query' => $query
             ]);
 
             $items = $body['items'];
 
+            $pageToken = $body['nextPageToken'] ?? null;
+
             // Skip loop
             if (count($items) === 0) {
                 break;
             }
 
-            $pageToken = $body['nextPageToken'] ?? null;
-
             $itemIterator = new \ArrayIterator($items);
 
             while ($itemIterator->valid()) {
                 $event = $itemIterator->current();
-                $eventId = $event['id'];
 
-                // Delete event if status is cancelled
-                if ($event['status'] === 'cancelled') {
-                    // TODO delete events
-                } else {
-                    $eventStart = $event['start'] ?? null;
-                    $startTimeZone = null;
-
-                    if (isset($eventStart)) {
-                        $startTimeZone = $eventStart['timeZone'] ?? 'UTC';
-                        $eventStart = $eventStart['dateTime'] ?? $eventStart['date'];
-                    }
-
-                    $eventEnd = $event['end'] ?? null;
-                    $endTimeZone = null;
-
-                    if (isset($eventEnd)) {
-                        $endTimeZone = $eventEnd['timeZone'] ?? 'UTC';
-                        $eventEnd = $eventEnd['dateTime'] ?? $eventEnd['date'];
-                    }
-
-                    $eventRepository->insert([
-                        'calendar_id' => $calendarId,
-                        'summary' => $event['summary'],
-                        'provider_id' => $eventId,
-                        'provider_type' => $this->provider->getProviderName(),
-                        'start_at' => Carbon::parse($eventStart)->tz($startTimeZone),
-                        'end_at' =>  Carbon::parse($eventEnd)->tz($endTimeZone),
-                        'created_at' => $now,
-                        'updated_at' => $now,
-                    ]);
-                }
+                $this->synchronizeEvent($event, $calendarId, $eventIds);
 
                 $itemIterator->next();
             }
@@ -244,27 +242,110 @@ public function synchronizeCalendars(Account $account, array $options = [])
         } while (is_null($pageToken) === false);
 
         $syncToken = $body['nextSyncToken'];
+        $now = now();
 
-        app(CalendarRepository::class)->updateByAttributes(
+        $calendarRepository->updateByAttributes(
             ['provider_id' => $calendarId, 'account_id' => $accountId],
             [
                 'sync_token' => Crypt::encryptString($syncToken),
-                'last_sync_at' => now(),
-                'updated_at' => now()
+                'last_sync_at' => $now,
+                'updated_at' => $now
             ]
         );
     }
 
     /**
-     * @return AccountRepository
+     * @throws ContainerExceptionInterface
+     * @throws NotFoundExceptionInterface
      */
-    public function getAccountRepository(): AccountRepository
+    protected function synchronizeEvent($event, $calendarId, Collection $eventIds): void
     {
-        if (empty($this->accountRepository)) {
-            $this->accountRepository = app(AccountRepository::class);
+        $eventId = $event['id'];
+
+        $eventRepository = $this->repository(EventRepository::class);
+
+        $attributes = [
+            'calendar_id' => $calendarId,
+            'provider_id' => $eventId,
+            'provider_type' => $this->provider->getProviderName()
+        ];
+
+        // Delete event if status is cancelled
+        if ($event['status'] === 'cancelled') {
+
+            if ($eventIds->contains($eventId)) {
+                Log::debug('Delete Event', $attributes);
+
+                $eventRepository->deleteWhere($attributes);
+            }
+
+            return;
         }
 
-        return $this->accountRepository;
+        $eventStart = $this->parseDateTime($event['start'] ?? null);
+        $eventEnd = $this->parseDateTime($event['end'] ?? null);
+
+        $isAllDay = isset($event['start']['date']);
+
+        // Update event bu ID
+        if ($eventIds->contains($eventId)) {
+            Log::debug('Update Event', $attributes);
+
+            $eventRepository->updateByAttributes(
+                $attributes,
+                [
+                    'summary' => $event['summary'],
+                    'is_all_day' => $isAllDay,
+                    'description' => $event['description'] ?? null,
+                    'start_at' => $eventStart,
+                    'end_at' => $eventEnd,
+                    'updated_at' => new \DateTime(),
+                ]
+            );
+        // Create event
+        } else {
+            Log::debug('Create Event', $attributes);
+
+            $eventRepository->insert(
+                array_merge($attributes, [
+                    'summary' => $event['summary'],
+                    'description' => $event['description'] ?? null,
+                    'start_at' => $eventStart,
+                    'end_at' =>  $eventEnd,
+                    'is_all_day' => $isAllDay,
+                    'created_at' => new \DateTime(),
+                    'updated_at' => new \DateTime(),
+                ])
+            );
+        }
+    }
+
+    /**
+     * @param $eventDateTime
+     * @return Carbon
+     */
+    protected function parseDateTime($eventDateTime): Carbon
+    {
+        if (isset($eventDateTime)) {
+            $eventDateTime = $eventDateTime['dateTime'] ?? $eventDateTime['date'];
+        }
+
+        return Carbon::parse($eventDateTime)->setTimezone('UTC');
+    }
+
+    /**
+     * @throws ContainerExceptionInterface
+     * @throws NotFoundExceptionInterface
+     */
+    protected function repository(string $name)
+    {
+        if (key_exists($name, $this->repositories) === true) {
+            return $this->repositories[$name];
+        }
+
+        $this->repositories[$name] = app()->get($name);
+
+        return $this->repositories[$name];
     }
 
     /**

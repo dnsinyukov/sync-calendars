@@ -7,18 +7,20 @@ use Dnsinyukov\SyncCalendars\Account;
 use Dnsinyukov\SyncCalendars\CalendarManager;
 use Dnsinyukov\SyncCalendars\Providers\GoogleProvider;
 use Dnsinyukov\SyncCalendars\Repositories\AccountRepository;
+use Dnsinyukov\SyncCalendars\Repositories\CalendarRepository;
 use Dnsinyukov\SyncCalendars\TokenFactory;
 use Illuminate\Console\Command;
+use Illuminate\Database\Eloquent\ModelNotFoundException;
 use Illuminate\Support\Facades\Crypt;
 
 class SynchronizeEvents extends Command
 {
     /**
-     * The console command name.
+     * The name and signature of the console command.
      *
      * @var string
      */
-    protected $name = 'synchronize:events';
+    protected $signature = 'synchronize:events {accountId}';
 
     /**
      * The console command description.
@@ -28,51 +30,54 @@ class SynchronizeEvents extends Command
     protected $description = 'Synchronize Events';
 
     /**
-     * Create a new command instance.
-     *
-     * @return void
-     */
-    public function __construct()
-    {
-        parent::__construct();
-    }
-
-    /**
      * Execute the console command.
      *
      * @return mixed
+     * @throws \Throwable
      */
     public function handle()
     {
+        $accountId = $this->argument('accountId');
+
+        $accountModel = app(AccountRepository::class)->find($accountId);
+
+        throw_if(empty($accountModel), ModelNotFoundException::class);
+
         /** @var GoogleProvider $provider */
         $provider = app(CalendarManager::class)->driver('google');
 
-        $accounts = app(AccountRepository::class)->get();
+        $calendars = app(CalendarRepository::class)->getByAttributes([
+            'account_id' => $accountId
+        ]);
 
-        foreach ($accounts as $accountModel) {
-            $provider->synchronize('Event', tap(new Account(), function ($account) use ($accountModel) {
+        $account = tap(new Account(), function ($account) use ($accountModel) {
 
-                $token = Crypt::decrypt($accountModel->token);
-                $syncToken = '';
+            $token = Crypt::decrypt($accountModel->token);
+            $syncToken = '';
 
-                if (isset($accountModel->sync_token)) {
-                    $syncToken = Crypt::decryptString($accountModel->sync_token);
-                }
+            if (isset($accountModel->sync_token)) {
+                $syncToken = Crypt::decryptString($accountModel->sync_token);
+            }
 
-                $account
-                    ->setId($accountModel->id)
-                    ->setProviderId($accountModel->provider_id)
-                    ->setUserId($accountModel->user_id)
-                    ->setName($accountModel->name)
-                    ->setEmail($accountModel->email)
-                    ->setPicture($accountModel->picture)
-                    ->setSyncToken($syncToken)
-                    ->setToken(TokenFactory::create($token));
-            }), [
-                'calendarId' => 'dnsinyukov@gmail.com',
-//                'syncToken' => Crypt::decryptString('eyJpdiI6ImgxRWZ2RFkxRVZUc0FTK2pmWThqNVE9PSIsInZhbHVlIjoidE8yZ3ZKOXFOMGNtWkhKalAwbUl5dVIvVmRGa2t0SFg3anZQVjV5MmxFZlZ4bE5XVTNoS1M1MFFjSWNxNU9mTyIsIm1hYyI6ImIxODdhYmZhMmQwYjQwYTIxZTE0N2YzMGY0YzY2MjBlM2Y4MmRhNDIwMzA4YmExMzE2YjYzMTE1OWE1OTNhMmUiLCJ0YWciOiIifQ==')
-            ]);
+            $account
+                ->setId($accountModel->id)
+                ->setProviderId($accountModel->provider_id)
+                ->setUserId($accountModel->user_id)
+                ->setName($accountModel->name)
+                ->setEmail($accountModel->email)
+                ->setPicture($accountModel->picture)
+                ->setSyncToken($syncToken)
+                ->setToken(TokenFactory::create($token));
+        });
 
+        foreach ($calendars as $calendar) {
+            $options = ['calendarId' => $calendar->provider_id];
+
+            if (isset($calendar->sync_token)) {
+                $options['syncToken'] = Crypt::decryptString($calendar->sync_token);
+            }
+
+            $provider->synchronize('Event', $account, $options);
         }
     }
 }

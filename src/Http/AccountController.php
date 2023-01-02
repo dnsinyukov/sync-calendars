@@ -36,9 +36,9 @@ class AccountController extends Controller
             $provider->getConfig('guard', 'web')
         );
 
-        if (empty($authUser)) {
-            abort(403);
-        }
+//        if (empty($authUser)) {
+//            abort(403);
+//        }
 
 //        dd(
 //            $this->manager->driver($driver)->synchronize('Calendar', [2])

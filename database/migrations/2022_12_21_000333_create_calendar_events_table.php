@@ -19,6 +19,8 @@ return new class extends Migration
             $table->string('summary')->nullable();
             $table->string('provider_id');
             $table->string('provider_type');
+            $table->longText('description')->nullable();
+            $table->boolean('is_all_day')->default(false);
             $table->timestamp('start_at')->nullable();
             $table->timestamp('end_at')->nullable();
             $table->timestamps();

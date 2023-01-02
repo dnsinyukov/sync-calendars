@@ -199,10 +199,10 @@ class Account
     }
 
     /**
-     * @param int $userId
+     * @param ?int $userId
      * @return Account
      */
-    public function setUserId(int $userId): self
+    public function setUserId(?int $userId): self
     {
         $this->userId = $userId;
 
